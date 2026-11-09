@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f2a1a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>כמה נשאר? – שביל</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+  :root { --g:#1fa463; --gd:#0f2a1a; --w:#fff; --mut:#9fb8a8; --card:#15392a; --red:#e5484d; --yel:#f5c542; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { margin:0; height:100%; background:var(--gd); color:var(--w); font-family:system-ui,-apple-system,"Segoe UI",Arial,sans-serif; }
+  body { display:flex; flex-direction:column; padding-top:env(safe-area-inset-top); }
+  header { display:flex; align-items:center; gap:10px; padding:10px 14px; }
+  .blaze { display:inline-flex; flex-direction:column; width:16px; height:30px; border-radius:3px; overflow:hidden; border:1px solid #0004; }
+  .blaze i { flex:1; background:#fff; } .blaze i:nth-child(2){ background:var(--g); }
+  header h1 { font-size:20px; margin:0; flex:1; }
+  #map { flex:1; min-height:200px; }
+  #panel { background:var(--card); padding:12px 14px calc(env(safe-area-inset-bottom) + 12px); border-radius:18px 18px 0 0; box-shadow:0 -4px 20px #0006; }
+  .big { text-align:center; }
+  .big .lbl { color:var(--mut); font-size:14px; }
+  .big .val { font-size:46px; font-weight:800; line-height:1.1; letter-spacing:.5px; }
+  .big .sub { color:var(--mut); font-size:15px; margin-top:2px; }
+  .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin:12px 0; }
+  .st { background:#0f2a1a; border-radius:12px; padding:8px; text-align:center; }
+  .st b { display:block; font-size:20px; }
+  .st span { color:var(--mut); font-size:12px; }
+  .prog { height:10px; background:#0f2a1a; border-radius:6px; overflow:hidden; margin:8px 0 4px; }
+  .prog div { height:100%; width:0; background:linear-gradient(90deg,#fff,var(--g)); transition:width .5s; }
+  .alert { border-radius:12px; padding:9px 12px; margin:8px 0; font-weight:600; font-size:15px; }
+  .alert.red { background:#5c1416; color:#ffd6d6; } .alert.yel { background:#4d3d08; color:#ffeeb3; }
+  .row { display:flex; gap:8px; }
+  button, .filebtn { flex:1; border:0; border-radius:12px; padding:13px; font-size:16px; font-weight:700; background:#244d39; color:#fff; text-align:center; }
+  button.primary { background:var(--g); }
+  button.danger { background:#5c1416; }
+  #setup { position:fixed; inset:0; background:var(--gd); z-index:2000; overflow:auto; padding:calc(env(safe-area-inset-top) + 20px) 18px 30px; }
+  #setup h2 { margin:0 0 4px; font-size:26px; display:flex; align-items:center; gap:10px; }
+  #setup p { color:#cfe3d7; line-height:1.55; }
+  .box { background:var(--card); border-radius:14px; padding:14px; margin:12px 0; }
+  .box h3 { margin:0 0 8px; font-size:17px; }
+  input[type=number], input[type=text] { width:100%; padding:12px; font-size:18px; border-radius:10px; border:1px solid #2f6b50; background:#0f2a1a; color:#fff; }
+  input[type=file] { display:none; }
+  .hint { color:var(--mut); font-size:13.5px; line-height:1.5; margin-top:6px; }
+  .or { text-align:center; color:var(--mut); margin:4px 0; }
+  #routeInfo { color:#bff0d2; margin-top:8px; font-size:15px; }
+  .chk { display:flex; align-items:center; gap:8px; margin-top:10px; color:#cfe3d7; }
+</style>
+</head>
+<body>
+<header>
+  <span class="blaze"><i></i><i></i><i></i></span>
+  <h1 id="title">כמה נשאר?</h1>
+  <button id="btnSetup" style="flex:0;padding:8px 12px;font-size:14px">⚙︎</button>
+</header>
+<div id="map"></div>
+<div id="panel">
+  <div id="alerts"></div>
+  <div class="big">
+    <div class="lbl">זמן משוער עד הסוף</div>
+    <div class="val" id="eta">--:--</div>
+    <div class="sub" id="etaSub">מחכה ל-GPS…</div>
+  </div>
+  <div class="prog"><div id="progBar"></div></div>
+  <div class="grid">
+    <div class="st"><b id="sDone">0.0</b><span>ק"מ עברת</span></div>
+    <div class="st"><b id="sLeft">–</b><span>ק"מ נשארו</span></div>
+    <div class="st"><b id="sPace">–</b><span>קמ"ש (הקצב שלך)</span></div>
+    <div class="st"><b id="sMove">0:00</b><span>זמן תנועה</span></div>
+    <div class="st"><b id="sElapsed">0:00</b><span>זמן כולל</span></div>
+    <div class="st"><b id="sClimb">–</b><span>עלייה שנשארה (מ')</span></div>
+  </div>
+  <div class="row">
+    <button class="primary" id="btnStart">▶ התחל</button>
+    <button id="btnCenter" style="flex:.45">◎</button>
+  </div>
+</div>
+
+<div id="setup">
+  <h2><span class="blaze"><i></i><i></i><i></i></span> כמה נשאר?</h2>
+  <p>האפליקציה מודדת באיזה קצב אתה הולך (בלי לספור עצירות), ומחשבת כמה זמן ייקח לך לסיים את השביל.</p>
+
+  <div class="box">
+    <h3>1. המסלול: קובץ GPX (מומלץ)</h3>
+    <label class="filebtn" style="display:block">📂 טען קובץ GPX של השביל<input type="file" id="gpx" accept=".gpx,application/gpx+xml,application/xml,text/xml"></label>
+    <div id="routeInfo"></div>
+    <label class="chk"><input type="checkbox" id="rev"> אני הולך בכיוון ההפוך לקובץ</label>
+    <div class="hint">עם GPX רואים את השביל על המפה, יודעים אם סטית ממנו, והחישוב מתחשב גם בעליות שנשארו. אפשר לשרטט את המסלול באתר "מפות ישראל לטיולים" (israelhiking.osm.org.il) לאורך הסימון הלבן-ירוק-לבן ולייצא GPX.</div>
+  </div>
+
+  <div class="or">— או —</div>
+
+  <div class="box">
+    <h3>2. בלי קובץ: אורך המסלול</h3>
+    <input type="number" id="km" inputmode="decimal" placeholder='לדוגמה: 8.5 ק"מ' step="0.1" min="0.1">
+    <div class="hint">החישוב יהיה לפי מרחק בלבד, בלי עליות.</div>
+  </div>
+
+  <div class="box">
+    <h3>שם השביל (לא חובה)</h3>
+    <input type="text" id="name" placeholder="למשל: נחל עמוד – שביל ירוק">
+  </div>
+
+  <div class="row"><button class="primary" id="btnOk">המשך</button></div>
+  <div class="row" style="margin-top:8px"><button id="btnResume" hidden>↩ המשך מסלול שמור</button></div>
+  <div class="row" style="margin-top:8px"><button id="btnDemo" hidden>🧪 הדגמה (מדמה הליכה על הקובץ)</button></div>
+  <p class="hint" style="margin-top:14px">💡 השאר את המסך דלוק בזמן ההליכה. דפדפן שעובר לרקע מפסיק לקבל מיקום. האפליקציה מנסה להשאיר את המסך דלוק אוטומטית.</p>
+  <p class="hint" id="secureWarn" style="color:#ffb3b3"></p>
+</div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const CLIMB_FACTOR = 8;           // 1 m of ascent ≈ 8 m of flat walking (Naismith)
+  const DEFAULT_KMH = 4;            // used until we have enough of your own data
+  const STORE = 'trailEta.v1';
+
+  // ---------- state ----------
+  let S = freshState();
+  function freshState(){ return {
+    name:'', route:null /* {pts:[[lat,lon,ele]], cum:[], asc:[], total, totalAsc} */, totalKm:null,
+    running:false, startedAt:null, moving:0, dist:0, last:null, startProg:null, prog:0, offRoute:0,
+    samples:[] /* [t, effortMeters] */, track:[]
+  }; }
+
+  // ---------- map ----------
+  const map = L.map('map', { zoomControl:false, attributionControl:true }).setView([31.8, 35.0], 8);
+  const osm  = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19, attribution:'© OpenStreetMap' });
+  const topo = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', { maxZoom:17, attribution:'© OpenTopoMap, OSM' });
+  const ihm  = L.tileLayer('https://israelhiking.osm.org.il/Hebrew/Tiles/{z}/{x}/{y}.png', { maxZoom:18, maxNativeZoom:16, attribution:'© Israel Hiking Map, OSM' });
+  topo.addTo(map);
+  L.control.layers({ 'טופוגרפית':topo, 'מפות ישראל לטיולים':ihm, 'רגילה':osm }, null, { position:'topleft' }).addTo(map);
+  let routeLayer=null, doneLayer=null, trackLayer=L.polyline([], { color:'#2b7bff', weight:4, opacity:.8 }).addTo(map), me=null, meAcc=null, follow=true;
+  map.on('dragstart', () => follow=false);
+
+  function drawRoute(){
+    if (routeLayer) map.removeLayer(routeLayer);
+    if (doneLayer) map.removeLayer(doneLayer);
+    if (!S.route) return;
+    const ll = S.route.pts.map(p=>[p[0],p[1]]);
+    // white-green-white look: wide white casing + green core
+    routeLayer = L.layerGroup([
+      L.polyline(ll, { color:'#fff', weight:10, opacity:.95 }),
+      L.polyline(ll, { color:'#1fa463', weight:4, opacity:1 }),
+      L.circleMarker(ll[0], { radius:7, color:'#fff', fillColor:'#1fa463', fillOpacity:1, weight:3 }).bindTooltip('התחלה'),
+      L.circleMarker(ll[ll.length-1], { radius:8, color:'#fff', fillColor:'#e5484d', fillOpacity:1, weight:3 }).bindTooltip('סוף'),
+    ]).addTo(map);
+    doneLayer = L.polyline([], { color:'#7a8a80', weight:4, opacity:.9 }).addTo(map);
+    map.fitBounds(L.latLngBounds(ll), { padding:[30,30] });
+  }
+
+  // ---------- geometry ----------
+  const R = 6371000, rad = d => d*Math.PI/180;
+  function hav(a,b){ const dLa=rad(b[0]-a[0]), dLo=rad(b[1]-a[1]); const x=Math.sin(dLa/2)**2+Math.cos(rad(a[0]))*Math.cos(rad(b[0]))*Math.sin(dLo/2)**2; return 2*R*Math.asin(Math.sqrt(x)); }
+  // project point p onto segment a-b in local metres; returns {t, d}
+  function projSeg(p,a,b){
+    const kx = Math.cos(rad(a[0]))*R*Math.PI/180, ky = R*Math.PI/180;
+    const ax=0, ay=0, bx=(b[1]-a[1])*kx, by=(b[0]-a[0])*ky, px=(p[1]-a[1])*kx, py=(p[0]-a[0])*ky;
+    const L2 = bx*bx+by*by; let t = L2 ? ((px-ax)*bx+(py-ay)*by)/L2 : 0; t = Math.max(0,Math.min(1,t));
+    const dx=px-t*bx, dy=py-t*by; return { t, d:Math.sqrt(dx*dx+dy*dy) };
+  }
+
+  function buildRoute(pts){
+    const cum=[0], asc=[0]; let lastEle = pts[0][2], a=0;
+    for (let i=1;i<pts.length;i++){
+      cum.push(cum[i-1]+hav(pts[i-1],pts[i]));
+      const e = pts[i][2];
+      if (e!=null && lastEle!=null){ const d=e-lastEle; if (d>3){ a+=d; lastEle=e; } else if (d<-3){ lastEle=e; } }
+      else if (e!=null) lastEle=e;
+      asc.push(a);
+    }
+    return { pts, cum, asc, total:cum[cum.length-1], totalAsc:a };
+  }
+
+  function parseGPX(text){
+    const doc = new DOMParser().parseFromString(text, 'application/xml');
+    let nodes = [...doc.getElementsByTagName('trkpt')];
+    if (!nodes.length) nodes = [...doc.getElementsByTagName('rtept')];
+    if (!nodes.length) nodes = [...doc.getElementsByTagName('wpt')];
+    const pts = nodes.map(n => { const e=n.getElementsByTagName('ele')[0]; return [ +n.getAttribute('lat'), +n.getAttribute('lon'), e? +e.textContent : null ]; })
+                     .filter(p => isFinite(p[0]) && isFinite(p[1]));
+    const nm = doc.getElementsByTagName('name')[0]?.textContent?.trim() || '';
+    return { pts, name:nm };
+  }
+
+  // where along the route am I? searches near the last known index first
+  let lastIdx = 0;
+  function locate(p){
+    const pts=S.route.pts, n=pts.length;
+    const scan = (from,to) => { let best={d:1e9,i:0,t:0}; for (let i=Math.max(0,from);i<Math.min(n-1,to);i++){ const r=projSeg(p,pts[i],pts[i+1]); if (r.d<best.d) best={d:r.d,i,t:r.t}; } return best; };
+    let b = scan(lastIdx-40, lastIdx+400);
+    if (b.d > 150) b = scan(0, n);
+    lastIdx = b.i;
+    const segLen = S.route.cum[b.i+1]-S.route.cum[b.i];
+    return { prog: S.route.cum[b.i] + b.t*segLen, ascAt: S.route.asc[b.i] + b.t*(S.route.asc[b.i+1]-S.route.asc[b.i]), off:b.d, i:b.i };
+  }
+  function ascAtProg(prog){
+    const c=S.route.cum; let lo=0, hi=c.length-1;
+    while (hi-lo>1){ const m=(lo+hi)>>1; if (c[m]<=prog) lo=m; else hi=m; }
+    const t = c[hi]>c[lo] ? (prog-c[lo])/(c[hi]-c[lo]) : 0;
+    return S.route.asc[lo] + t*(S.route.asc[hi]-S.route.asc[lo]);
+  }
+
+  // ---------- GPS handling ----------
+  let watchId=null, demoTimer=null;
+  function onPos(pos){
+    const now = pos.timestamp || Date.now();
+    const p = [pos.coords.latitude, pos.coords.longitude];
+    const acc = pos.coords.accuracy || 999;
+    showMe(p, acc);
+    if (!S.running) return;
+    if (acc > 40) { render(); return; }      // too noisy, ignore for stats
+
+    if (S.last){
+      const d = hav(S.last.p, p), dt = (now - S.last.t)/1000;
+      if (d < Math.max(4, acc*0.4)) { render(); return; }   // jitter, wait for real movement
+      const v = d/Math.max(dt,0.001);
+      if (v > 4) { S.last = { p, t:now }; render(); return; }  // jump (>14 km/h) → GPS glitch
+      S.dist += d;
+      if (v > 0.25 && dt < 120) S.moving += dt;   // only count time while actually walking
+      S.track.push(p); trackLayer.addLatLng(p);
+    } else {
+      S.track.push(p); trackLayer.addLatLng(p);
+    }
+    S.last = { p, t:now };
+
+    if (S.route){
+      const r = locate(p);
+      S.prog = r.prog; S.offRoute = r.off;
+      if (S.startProg==null) S.startProg = { prog:r.prog, asc:r.ascAt };
+    }
+    S.samples.push([S.moving, effortDone()]);
+    if (S.samples.length > 2000) S.samples.splice(0, 1000);
+    save(); render();
+  }
+
+  function effortDone(){
+    if (S.route && S.startProg){
+      const dp = Math.max(0, S.prog - S.startProg.prog);
+      const da = Math.max(0, ascAtProg(S.prog) - S.startProg.asc);
+      return dp + CLIMB_FACTOR*da;
+    }
+    return S.dist;
+  }
+
+  function showMe(p, acc){
+    if (!me){ me = L.circleMarker(p, { radius:9, color:'#fff', weight:3, fillColor:'#2b7bff', fillOpacity:1 }).addTo(map); meAcc = L.circle(p, { radius:acc, color:'#2b7bff', weight:1, fillOpacity:.1 }).addTo(map); }
+    else { me.setLatLng(p); meAcc.setLatLng(p).setRadius(acc); }
+    if (follow) map.setView(p, Math.max(map.getZoom(), 15), { animate:true });
+  }
+
+  // ---------- calculations ----------
+  function paceSecPerMeter(){
+    const eff = effortDone();
+    if (eff < 300 || S.moving < 240) return { spm: 3.6/DEFAULT_KMH, guess:true };
+    let spm = S.moving / eff;
+    // blend with the last ~15 minutes of moving time so the estimate follows you when you tire or speed up
+    const sm = S.samples; const tNow = S.moving;
+    let j = sm.length-1; while (j>0 && tNow - sm[j][0] < 900) j--;
+    const dT = tNow - sm[j][0], dE = eff - sm[j][1];
+    if (dT > 300 && dE > 150) spm = 0.6*spm + 0.4*(dT/dE);
+    return { spm, guess:false };
+  }
+
+  function remaining(){
+    if (S.route){
+      const left = Math.max(0, S.route.total - S.prog);
+      const ascLeft = Math.max(0, S.route.totalAsc - ascAtProg(S.prog));
+      return { left, ascLeft, total:S.route.total };
+    }
+    if (S.totalKm){ const total=S.totalKm*1000; return { left:Math.max(0,total-S.dist), ascLeft:null, total }; }
+    return null;
+  }
+
+  // NOAA sunset approximation (local time)
+  function sunset(lat, lon, date=new Date()){
+    const start = new Date(date.getFullYear(),0,0), N = Math.floor((date-start)/864e5);
+    const lngHour = lon/15, t = N + ((18 - lngHour)/24);
+    const M = 0.9856*t - 3.289;
+    let Ls = M + 1.916*Math.sin(rad(M)) + 0.020*Math.sin(rad(2*M)) + 282.634; Ls=(Ls+360)%360;
+    let RA = Math.atan(0.91764*Math.tan(rad(Ls)))*180/Math.PI; RA=(RA+360)%360;
+    RA += (Math.floor(Ls/90)*90 - Math.floor(RA/90)*90); RA/=15;
+    const sinDec = 0.39782*Math.sin(rad(Ls)), cosDec = Math.cos(Math.asin(sinDec));
+    const cosH = (Math.cos(rad(90.833)) - sinDec*Math.sin(rad(lat))) / (cosDec*Math.cos(rad(lat)));
+    if (cosH < -1 || cosH > 1) return null;
+    const Hh = Math.acos(cosH)*180/Math.PI/15;
+    const T = Hh + RA - 0.06571*t - 6.622;
+    const UT = ((T - lngHour) % 24 + 24) % 24;
+    const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) + UT*36e5);
+    return d;
+  }
+
+  // ---------- rendering ----------
+  const fmtHM = s => { s=Math.max(0,Math.round(s)); const h=Math.floor(s/3600), m=Math.floor(s%3600/60); return h+':'+String(m).padStart(2,'0'); };
+  const fmtClock = d => d.toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'});
+
+  function render(){
+    $('title').textContent = S.name || 'כמה נשאר?';
+    const rem = remaining();
+    const done = S.route ? Math.max(0, S.prog) : S.dist;
+    $('sDone').textContent = (done/1000).toFixed(1);
+    $('sMove').textContent = fmtHM(S.moving);
+    const elapsed = S.startedAt ? (Date.now()-S.startedAt)/1000 : 0;
+    $('sElapsed').textContent = fmtHM(elapsed);
+    const { spm, guess } = paceSecPerMeter();
+    $('sPace').textContent = guess ? '~'+DEFAULT_KMH : (S.moving > 0 ? (3.6*S.dist/S.moving).toFixed(1) : '–');
+    const alerts = [];
+
+    if (!rem){ $('eta').textContent='--:--'; $('etaSub').textContent='הגדר מסלול ב-⚙︎'; $('alerts').innerHTML=''; return; }
+    $('sLeft').textContent = (rem.left/1000).toFixed(1);
+    $('sClimb').textContent = rem.ascLeft==null ? '–' : Math.round(rem.ascLeft);
+    $('progBar').style.width = (100*Math.min(1, 1-rem.left/rem.total)) + '%';
+
+    if (doneLayer && S.route){ const i = lastIdx; doneLayer.setLatLngs(S.route.pts.slice(0,i+2).map(p=>[p[0],p[1]])); }
+
+    if (rem.left < 30 && S.running){ $('eta').textContent='🎉'; $('etaSub').textContent='הגעת לסוף השביל!'; $('alerts').innerHTML=''; return; }
+
+    const effLeft = rem.left + CLIMB_FACTOR*(rem.ascLeft||0);
+    const moveLeft = spm * effLeft;
+    const breakRatio = (S.moving > 600 && elapsed > S.moving) ? Math.min(2, elapsed/S.moving) : 1.1;
+    const withBreaks = moveLeft * breakRatio;
+    const arrive = new Date(Date.now() + withBreaks*1000);
+    $('eta').textContent = fmtHM(withBreaks);
+    $('etaSub').textContent = `סיום בערך ב-${fmtClock(arrive)} · ${fmtHM(moveLeft)} הליכה נטו` + (guess ? ' · (הערכה ראשונית, מתעדכן לפי הקצב שלך)' : '');
+
+    if (S.route && S.running && S.offRoute > 60) alerts.push(['red', `⚠️ אתה ${Math.round(S.offRoute)} מ' מחוץ לשביל. חפש את הסימון הלבן-ירוק-לבן`]);
+    const pos = S.last?.p || (S.route && S.route.pts[0]);
+    if (pos){
+      const ss = sunset(pos[0], pos[1]);
+      if (ss){
+        const minsToDark = (ss - arrive)/60000;
+        if (ss < Date.now()) alerts.push(['red','🌙 השמש כבר שקעה. פנס, ולהישאר על השביל']);
+        else if (minsToDark < 0) alerts.push(['red', `🌇 שקיעה ב-${fmtClock(ss)}: בקצב הזה תסיים אחרי החשכה. שקול לקצר או לחזור`]);
+        else if (minsToDark < 45) alerts.push(['yel', `🌇 שקיעה ב-${fmtClock(ss)}: תסיים קרוב לחשכה`]);
+      }
+    }
+    $('alerts').innerHTML = alerts.map(a=>`<div class="alert ${a[0]}">${a[1]}</div>`).join('');
+  }
+  setInterval(() => { if (S.running) render(); }, 15000);
+
+  // ---------- persistence ----------
+  function save(){ try { localStorage.setItem(STORE, JSON.stringify({ ...S, track:S.track.slice(-3000), savedAt:Date.now() })); } catch(e){} }
+  function load(){ try { return JSON.parse(localStorage.getItem(STORE)); } catch(e){ return null; } }
+
+  // ---------- wake lock ----------
+  let wake=null;
+  async function keepAwake(){ try { if ('wakeLock' in navigator && S.running) wake = await navigator.wakeLock.request('screen'); } catch(e){} }
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState==='visible') keepAwake(); });
+
+  // ---------- controls ----------
+  let pendingRoute = null;
+  $('gpx').onchange = async e => {
+    const f = e.target.files[0]; if (!f) return;
+    const { pts, name } = parseGPX(await f.text());
+    if (pts.length < 2){ $('routeInfo').textContent = 'לא נמצאו נקודות מסלול בקובץ 🙁'; pendingRoute=null; return; }
+    pendingRoute = { pts, name };
+    const r = buildRoute(pts);
+    $('routeInfo').textContent = `✓ ${name || f.name}: ${(r.total/1000).toFixed(1)} ק"מ, ${Math.round(r.totalAsc)} מ' עלייה מצטברת`;
+    if (name && !$('name').value) $('name').value = name;
+    $('btnDemo').hidden = false;
+  };
+
+  function applySetup(){
+    const km = parseFloat($('km').value);
+    if (!pendingRoute && !(km>0)) { alert2('טען קובץ GPX או הכנס אורך מסלול'); return false; }
+    S = freshState();
+    S.name = $('name').value.trim();
+    if (pendingRoute){ let pts = pendingRoute.pts.slice(); if ($('rev').checked) pts.reverse(); S.route = buildRoute(pts); }
+    else S.totalKm = km;
+    lastIdx = 0; trackLayer.setLatLngs([]);
+    drawRoute(); closeSetup(); render(); startGPS(); save();
+    return true;
+  }
+  function alert2(msg){ $('routeInfo').textContent = msg; $('routeInfo').style.color='#ffb3b3'; setTimeout(()=>{$('routeInfo').style.color='';},3000); }
+
+  $('btnOk').onclick = applySetup;
+  $('btnSetup').onclick = () => { $('setup').style.display='block'; checkResume(); };
+  function closeSetup(){ $('setup').style.display='none'; setTimeout(()=>map.invalidateSize(),50); }
+
+  function checkResume(){
+    const old = load();
+    $('btnResume').hidden = !(old && (old.route || old.totalKm));
+    if (old) $('btnResume').textContent = `↩ המשך: ${old.name || 'מסלול שמור'} (${((old.route?old.prog:old.dist)/1000).toFixed(1)} ק"מ)`;
+  }
+  $('btnResume').onclick = () => {
+    const old = load(); if (!old) return;
+    S = Object.assign(freshState(), old);
+    if (S.running && S.last) S.last.t = Date.now();       // do not count the gap as walking
+    trackLayer.setLatLngs(S.track || []);
+    drawRoute(); closeSetup(); updateStartBtn(); render(); startGPS(); keepAwake();
+  };
+
+  function updateStartBtn(){
+    const b = $('btnStart');
+    if (S.running){ b.textContent='⏸ הפסקה'; b.className=''; }
+    else { b.textContent = S.startedAt ? '▶ המשך' : '▶ התחל'; b.className='primary'; }
+  }
+  $('btnStart').onclick = () => {
+    if (!S.route && !S.totalKm){ $('setup').style.display='block'; return; }
+    S.running = !S.running;
+    if (S.running){ if (!S.startedAt) S.startedAt = Date.now(); if (S.last) S.last.t = Date.now(); keepAwake(); }
+    else { try{ wake && wake.release(); }catch(e){} }
+    updateStartBtn(); save(); render();
+  };
+  $('btnCenter').onclick = () => { follow = true; if (S.last) map.setView(S.last.p, 16); };
+
+  function startGPS(){
+    if (demoTimer) return;
+    if (watchId!=null) return;
+    if (!navigator.geolocation){ $('etaSub').textContent='אין GPS בדפדפן הזה'; return; }
+    watchId = navigator.geolocation.watchPosition(onPos, err => {
+      $('etaSub').textContent = 'אין גישה למיקום: ' + (err.code===1 ? 'אשר הרשאת מיקום בהגדרות' : err.message);
+    }, { enableHighAccuracy:true, maximumAge:2000, timeout:20000 });
+  }
+
+  // demo: walk along the loaded GPX at ~4 km/h, 20× faster than real time
+  $('btnDemo').onclick = () => {
+    if (!applySetup()) return;
+    if (watchId!=null){ navigator.geolocation.clearWatch(watchId); watchId=null; }
+    S.running = true; S.startedAt = Date.now(); updateStartBtn();
+    const pts = S.route.pts, cum = S.route.cum; let simT = 0, simClock = Date.now(); const speed = 4/3.6, FAST = 20;
+    demoTimer = setInterval(() => {
+      simT += FAST; simClock += FAST*1000;
+      // slower on climbs, a stop now and then
+      let d = simT*speed; if (d >= S.route.total){ clearInterval(demoTimer); d = S.route.total; }
+      let i=0; while (i<cum.length-2 && cum[i+1]<d) i++;
+      const t = (d-cum[i])/Math.max(1e-6,cum[i+1]-cum[i]);
+      const p = [pts[i][0]+t*(pts[i+1][0]-pts[i][0]), pts[i][1]+t*(pts[i+1][1]-pts[i][1])];
+      S.startedAt = Date.now() - simT*1000;   // elapsed follows simulated time
+      onPos({ timestamp:simClock, coords:{ latitude:p[0], longitude:p[1], accuracy:8 } });
+    }, 1000);
+  };
+
+  // ---------- boot ----------
+  if (!window.isSecureContext) $('secureWarn').textContent = 'שים לב: GPS עובד רק בכתובת https:// (או localhost).';
+  checkResume();
+  render();
+})();
+</script>
+</body>
+</html>

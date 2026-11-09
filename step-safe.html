@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1a10">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>צעד בטוח</title>
+<style>
+  :root { --g:#22e07a; --r:#ff4d4d; --y:#ffd23f; --bg:#0b1a10; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { margin:0; height:100%; background:#000; color:#fff; font-family:system-ui,-apple-system,"Segoe UI",Arial,sans-serif; overflow:hidden; }
+  #view { position:fixed; inset:0; width:100vw; height:100vh; display:block; }
+  video { position:absolute; width:1px; height:1px; opacity:0; pointer-events:none; }
+  #banner { position:fixed; top:calc(env(safe-area-inset-top) + 10px); left:10px; right:10px; padding:10px 14px; border-radius:14px;
+            background:rgba(0,0,0,.6); backdrop-filter:blur(6px); font-size:19px; font-weight:700; text-align:center; transition:background .2s; }
+  #banner.good { background:rgba(10,90,45,.8); }
+  #banner.warn { background:rgba(140,100,0,.85); }
+  #banner.bad  { background:rgba(150,20,20,.85); }
+  #bar { position:fixed; bottom:calc(env(safe-area-inset-bottom) + 10px); left:10px; right:10px; display:flex; gap:8px; justify-content:center; flex-wrap:wrap; }
+  .btn { background:rgba(0,0,0,.6); color:#fff; border:1px solid rgba(255,255,255,.25); border-radius:12px; padding:10px 14px; font-size:15px; backdrop-filter:blur(6px); }
+  .btn.on { border-color:var(--g); color:var(--g); }
+  #start { position:fixed; inset:0; background:var(--bg); display:flex; flex-direction:column; align-items:center; justify-content:center; padding:24px; text-align:center; z-index:5; overflow:auto; }
+  #start h1 { font-size:34px; margin:0 0 6px; color:var(--g); }
+  #start p { max-width:420px; line-height:1.55; color:#cfe; margin:8px 0; font-size:16px; }
+  #start .warnbox { background:#2a2208; border:1px solid #6a5a12; color:#ffe7a0; border-radius:12px; padding:12px 14px; max-width:420px; font-size:15px; line-height:1.5; margin:14px 0; text-align:right; }
+  #go { margin-top:10px; font-size:22px; padding:16px 40px; border-radius:16px; background:var(--g); color:#03210f; border:0; font-weight:800; }
+  #err { color:#ff9a9a; margin-top:12px; max-width:420px; }
+  .legend { display:flex; gap:14px; justify-content:center; margin:6px 0; font-size:15px; }
+  .legend span::before { content:""; display:inline-block; width:14px; height:14px; border-radius:4px; margin-left:6px; vertical-align:-2px; background:var(--c); }
+  #sens { width:120px; vertical-align:middle; }
+</style>
+</head>
+<body>
+<video id="video" playsinline muted autoplay></video>
+<canvas id="view"></canvas>
+<div id="banner" hidden>מכוון…</div>
+<div id="bar" hidden>
+  <button class="btn on" id="tGrid">רשת צבעים</button>
+  <button class="btn" id="tFreeze">⏸ הקפא</button>
+  <label class="btn">רגישות <input type="range" id="sens" min="0" max="100" value="50"></label>
+</div>
+
+<div id="start">
+  <h1>👣 צעד בטוח</h1>
+  <p>כוון את המצלמה לקרקע שלפניך (בערך מטר עד שניים קדימה). האפליקציה מסמנת:</p>
+  <div class="legend">
+    <span style="--c:var(--g)">יציב</span>
+    <span style="--c:var(--y)">זהירות</span>
+    <span style="--c:var(--r)">להימנע</span>
+  </div>
+  <p>ועיגול ירוק גדול על <b>המקום הכי טוב לצעד הבא</b>.</p>
+  <div class="warnbox">
+    ⚠️ <b>חשוב:</b> זה כלי עזר שמנחש לפי מרקם, צללים ובוהק בתמונה. הוא לא יודע מה שיפוע הקרקע, ולא מזהה אבן רופפת או חול שמחליק.
+    <br>• <b>עצור כדי לסרוק</b>, ואז צעד. הליכה עם העיניים על המסך מגבירה את הסיכון ליפול.
+    <br>• בקטעים קשים: מקלות הליכה, צעדים קצרים ושלוש נקודות מגע.
+  </div>
+  <button id="go">הפעל מצלמה</button>
+  <div id="err"></div>
+</div>
+
+<script>
+(() => {
+  const video = document.getElementById('video');
+  const view  = document.getElementById('view');
+  const ctx   = view.getContext('2d');
+  const banner= document.getElementById('banner');
+  const proc  = document.createElement('canvas');
+  const pctx  = proc.getContext('2d', { willReadFrequently:true });
+  const snap  = document.createElement('canvas');
+
+  let showGrid = true, frozen = false, sens = 0.5;
+  let W=0, H=0, DPR=1;
+  let PW = 120, PH = 200;          // processing resolution
+  const COLS = 6;
+  let ROWS = 10;
+  let scores = null;               // smoothed per-cell scores 0..1
+  let prevGray = null;
+  let motion = 0;
+  let target = null;               // {x,y,w,h,ok} in processing coords, smoothed
+  let lastProc = 0;
+  let wakeLock = null;
+
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth; H = window.innerHeight;
+    view.width = W*DPR; view.height = H*DPR;
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+    PW = 120; PH = Math.round(PW * H / W);
+    proc.width = PW; proc.height = PH;
+    ROWS = Math.max(6, Math.round(COLS * H / W));
+    scores = null; prevGray = null; target = null;
+  }
+  window.addEventListener('resize', resize);
+
+  function cropRect() {
+    const vw = video.videoWidth, vh = video.videoHeight;
+    const s = Math.max(W/vw, H/vh);
+    const sw = W/s, sh = H/s;
+    return [ (vw-sw)/2, (vh-sh)/2, sw, sh ];
+  }
+
+  async function start() {
+    const err = document.getElementById('err');
+    if (!window.isSecureContext) { err.textContent = 'המצלמה עובדת רק בכתובת https:// (או localhost). צריך לארח את הקובץ בשרת מאובטח.'; return; }
+    if (!navigator.mediaDevices?.getUserMedia) { err.textContent = 'הדפדפן לא תומך בגישה למצלמה.'; return; }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio:false,
+        video:{ facingMode:{ ideal:'environment' }, width:{ ideal:1280 }, height:{ ideal:720 } }
+      });
+      video.srcObject = stream;
+      await video.play();
+    } catch(e) {
+      err.textContent = 'לא התקבלה גישה למצלמה: ' + (e.message || e.name) + '. אשר הרשאת מצלמה בהגדרות הדפדפן.';
+      return;
+    }
+    document.getElementById('start').hidden = true;
+    document.getElementById('start').style.display = 'none';
+    banner.hidden = false; document.getElementById('bar').hidden = false;
+    resize();
+    requestWake();
+    requestAnimationFrame(loop);
+  }
+
+  async function requestWake() {
+    try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch(e) {}
+  }
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') requestWake(); });
+
+  // ---------- image analysis ----------
+  function analyse() {
+    const [sx,sy,sw,sh] = cropRect();
+    pctx.drawImage(video, sx,sy,sw,sh, 0,0,PW,PH);
+    const img = pctx.getImageData(0,0,PW,PH).data;
+    const N = PW*PH;
+    const gray = new Float32Array(N);
+    let sum = 0;
+    for (let i=0,j=0;i<N;i++,j+=4){ const g = 0.299*img[j]+0.587*img[j+1]+0.114*img[j+2]; gray[i]=g; sum+=g; }
+    const mean = sum/N;
+
+    // motion = mean abs difference vs previous frame
+    if (prevGray) { let d=0; for (let i=0;i<N;i+=3) d+=Math.abs(gray[i]-prevGray[i]); motion = motion*0.5 + (d/(N/3))*0.5; }
+    prevGray = gray;
+
+    // Sobel edge magnitude
+    const edge = new Float32Array(N);
+    for (let y=1;y<PH-1;y++) for (let x=1;x<PW-1;x++){
+      const i=y*PW+x;
+      const gx = -gray[i-PW-1]-2*gray[i-1]-gray[i+PW-1]+gray[i-PW+1]+2*gray[i+1]+gray[i+PW+1];
+      const gy = -gray[i-PW-1]-2*gray[i-PW]-gray[i-PW+1]+gray[i+PW-1]+2*gray[i+PW]+gray[i+PW+1];
+      edge[i] = Math.sqrt(gx*gx+gy*gy);
+    }
+
+    const cw = PW/COLS, ch = PH/ROWS, C = COLS*ROWS;
+    const E = new Float32Array(C), S = new Float32Array(C), D = new Float32Array(C), Wt = new Float32Array(C);
+    const darkT = mean*0.45;
+    for (let r=0;r<ROWS;r++) for (let c=0;c<COLS;c++){
+      const x0=Math.floor(c*cw), x1=Math.floor((c+1)*cw), y0=Math.floor(r*ch), y1=Math.floor((r+1)*ch);
+      let es=0, gs=0, gs2=0, dk=0, wh=0, n=0;
+      for (let y=Math.max(1,y0);y<Math.min(PH-1,y1);y++) for (let x=Math.max(1,x0);x<Math.min(PW-1,x1);x++){
+        const i=y*PW+x, g=gray[i];
+        es+=edge[i]; gs+=g; gs2+=g*g; n++;
+        if (g<darkT) dk++;
+        if (g>245) wh++;
+      }
+      const k=r*COLS+c;
+      if (!n){ E[k]=0; continue; }
+      E[k]=es/n; const m=gs/n; S[k]=Math.sqrt(Math.max(0,gs2/n-m*m)); D[k]=dk/n; Wt[k]=wh/n;
+    }
+
+    // normalise: blend relative (vs. this frame) and absolute scale
+    const rel = (arr, absScale) => {
+      const s = Array.from(arr).sort((a,b)=>a-b);
+      const lo = s[Math.floor(s.length*0.1)], hi = s[Math.floor(s.length*0.9)];
+      return Array.from(arr, v => 0.5*clamp((v-lo)/(hi-lo+1e-6)) + 0.5*clamp(v/absScale));
+    };
+    const En = rel(E, 70), Sn = rel(S, 45);
+
+    const k0 = 0.6 + sens*0.8;  // sensitivity multiplier on penalties
+    const raw = new Float32Array(C);
+    for (let r=0;r<ROWS;r++) for (let c=0;c<COLS;c++){
+      const k=r*COLS+c;
+      // neighbour edges: being next to a rock edge / drop is risky too
+      let nb=0;
+      for (let dr=-1;dr<=1;dr++) for (let dc=-1;dc<=1;dc++){
+        if(!dr&&!dc) continue; const rr=r+dr, cc=c+dc;
+        if(rr<0||cc<0||rr>=ROWS||cc>=COLS) continue; nb=Math.max(nb, En[rr*COLS+cc]);
+      }
+      const pen = 0.50*En[k] + 0.18*Sn[k] + 0.18*nb + 0.9*D[k] + 0.6*Wt[k];
+      raw[k] = clamp(1.15 - pen*k0);
+    }
+    if (!scores || scores.length!==C) scores = Float32Array.from(raw);
+    else for (let k=0;k<C;k++) scores[k] = scores[k]*0.65 + raw[k]*0.35;
+
+    // best 2x2 block in the "next step" zone (lower-middle of the frame)
+    const rMin = Math.floor(ROWS*0.40), rMax = Math.max(rMin, Math.floor(ROWS*0.84)-2), cMin = 0, cMax = COLS-2;
+    let best=-1, br=0, bc=0, bmin=0;
+    for (let r=rMin;r<=rMax;r++) for (let c=cMin;c<=cMax;c++){
+      const a=scores[r*COLS+c], b=scores[r*COLS+c+1], d=scores[(r+1)*COLS+c], e=scores[(r+1)*COLS+c+1];
+      const centerBias = 1 - 0.12*Math.abs((c+1)-COLS/2)/(COLS/2);     // prefer straight ahead
+      const distBias   = 1 - 0.08*Math.abs((r+1)-ROWS*0.66)/(ROWS*0.3); // prefer a normal step length
+      const v = (a+b+d+e)/4 * centerBias * distBias;
+      if (v>best){ best=v; br=r; bc=c; bmin=Math.min(a,b,d,e); }
+    }
+    const t = { x:bc*cw, y:br*ch, w:cw*2, h:ch*2, ok: bmin>0.55 && best>0.6, q:best };
+    if (!target) target = t;
+    else { const a=0.35; target = { x:target.x+(t.x-target.x)*a, y:target.y+(t.y-target.y)*a, w:t.w, h:t.h, ok:t.ok, q:t.q }; }
+  }
+
+  function clamp(v){ return v<0?0:v>1?1:v; }
+
+  // ---------- drawing ----------
+  function draw(now) {
+    if (!frozen) {
+      const [sx,sy,sw,sh] = cropRect();
+      ctx.drawImage(video, sx,sy,sw,sh, 0,0,W,H);
+    } else {
+      ctx.drawImage(snap, 0,0,W,H);
+    }
+    if (!scores) return;
+    const fx = W/PW, fy = H/PH, cw=PW/COLS*fx, ch=PH/ROWS*fy;
+    const moving = motion > 16 && !frozen;
+
+    if (showGrid && !moving) {
+      for (let r=0;r<ROWS;r++) for (let c=0;c<COLS;c++){
+        const s=scores[r*COLS+c];
+        let col=null;
+        if (s>=0.7) col=`rgba(34,224,122,${0.18+0.25*(s-0.7)/0.3})`;
+        else if (s<0.42) col=`rgba(255,60,60,${0.18+0.25*(0.42-s)/0.42})`;
+        else if (s<0.55) col='rgba(255,210,63,0.16)';
+        if (col){ ctx.fillStyle=col; ctx.fillRect(c*cw+1, r*ch+1, cw-2, ch-2); }
+      }
+    }
+
+    if (moving) {
+      setBanner('✋ עצור רגע כדי לסרוק את הקרקע', 'warn');
+    } else if (target && target.ok) {
+      const cx=(target.x+target.w/2)*fx, cy=(target.y+target.h/2)*fy;
+      const rx=target.w*fx*0.38, ry=target.h*fy*0.42;
+      const pulse = 1 + 0.06*Math.sin(now/180);
+      ctx.save();
+      ctx.shadowColor='#22e07a'; ctx.shadowBlur=24;
+      ctx.lineWidth=6; ctx.strokeStyle='#22e07a';
+      ctx.fillStyle='rgba(34,224,122,0.30)';
+      ctx.beginPath(); ctx.ellipse(cx,cy,rx*pulse,ry*pulse,0,0,Math.PI*2); ctx.fill(); ctx.stroke();
+      ctx.shadowBlur=0;
+      ctx.font='bold 34px system-ui'; ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillStyle='#fff'; ctx.fillText('👣', cx, cy);
+      ctx.restore();
+      setBanner('דרוך בעיגול הירוק', 'good');
+    } else {
+      setBanner('⚠️ אין מקום יציב ברור. צעד קצר, בדוק בעיניים', 'bad');
+    }
+  }
+
+  let lastBanner='';
+  function setBanner(text, cls){
+    const key=text+cls; if (key===lastBanner) return; lastBanner=key;
+    banner.textContent=text; banner.className=cls;
+    if (cls==='bad' && navigator.vibrate) { try{ navigator.vibrate([60,60,60]); }catch(e){} }
+  }
+
+  function loop(now) {
+    if (video.readyState >= 2) {
+      if (!frozen && now - lastProc > 90) { analyse(); lastProc = now; }
+      draw(now);
+    }
+    requestAnimationFrame(loop);
+  }
+
+  // ---------- controls ----------
+  document.getElementById('go').onclick = start;
+  const tGrid = document.getElementById('tGrid');
+  tGrid.onclick = () => { showGrid=!showGrid; tGrid.classList.toggle('on', showGrid); };
+  const tFreeze = document.getElementById('tFreeze');
+  tFreeze.onclick = () => {
+    if (!frozen) { snap.width=view.width; snap.height=view.height; const [sx,sy,sw,sh]=cropRect(); snap.getContext('2d').drawImage(video,sx,sy,sw,sh,0,0,snap.width,snap.height); }
+    frozen=!frozen; tFreeze.classList.toggle('on', frozen); tFreeze.textContent = frozen ? '▶ המשך' : '⏸ הקפא'; };
+  document.getElementById('sens').oninput = e => { sens = e.target.value/100; };
+})();
+</script>
+</body>
+</html>
